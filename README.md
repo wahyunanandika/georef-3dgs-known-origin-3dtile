@@ -4,7 +4,8 @@ Place a 3D Gaussian Splatting (3DGS) scene on the globe and export it as **3D Ti
 
 The pipeline takes a standard 3DGS `.ply`, a 7-parameter similarity transform (scale, rotation, translation) from the PLY's local frame to ECEF, and writes an octree-tiled tileset where every tile is a GLB carrying an SPZ v3 payload.
 
-> Adapted from [dozeri83/geo-register-plugin](https://github.com/dozeri83/geo-register-plugin) (GPL-3.0), reworked into a standalone Python pipeline.
+> Derived from [wahyunanandika/3dtiles_georeference_3dgs](https://github.com/wahyunanandika/3dtiles_georeference_3dgs),
+> which builds on [dozeri83/geo-register-plugin](https://github.com/dozeri83/geo-register-plugin).
 
 ---
 
@@ -353,4 +354,9 @@ Positions use 24-bit signed fixed point with 12 fractional bits, giving a range 
 
 ## License
 
-GPL-3.0. Portions derived from [dozeri83/geo-register-plugin](https://github.com/dozeri83/geo-register-plugin).
+GPL-3.0.
+
+SPZ encoding, similarity transform estimation and the 3D Tiles export structure trace back to
+[dozeri83/geo-register-plugin](https://github.com/dozeri83/geo-register-plugin) via
+[3dtiles_georeference_3dgs](https://github.com/wahyunanandika/3dtiles_georeference_3dgs).
+The SPZ encoder follows the [Niantic SPZ](https://github.com/nianticlabs/spz) format specification (MIT).

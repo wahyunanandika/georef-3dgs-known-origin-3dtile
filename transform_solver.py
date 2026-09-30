@@ -1,6 +1,8 @@
-# Adapted from dozeri83/geo-register-plugin
+# Adapted from wahyunanandika/3dtiles_georeference_3dgs
+# https://github.com/wahyunanandika/3dtiles_georeference_3dgs
+# which is derived from dozeri83/geo-register-plugin
 # https://github.com/dozeri83/geo-register-plugin
-# Original licensed under GPL-3.0
+# Licensed under GPL-3.0
 # Modifications by wahyunanandika — June 2026
 """Solve the PLY → ECEF similarity transform.
 

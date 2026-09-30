@@ -1,4 +1,6 @@
-# Modifications by wahyunanandika — June 2026
+# Part of wahyunanandika/georef-3dgs-known-origin-3dtile
+# Author: wahyunanandika — June 2026
+# Licensed under GPL-3.0
 """Build a similarity_transform.json from a single manual anchor point —
 no Metashape camera XML required.
 
