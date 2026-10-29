@@ -2,7 +2,7 @@
 
 Place a 3D Gaussian Splatting (3DGS) scene on the globe and export it as **3D Tiles 1.1** with **SPZ-compressed Gaussian splats**, viewable in **CesiumJS / Cesium ion** and **ArcGIS Pro**.
 
-The pipeline takes a standard 3DGS `.ply`, a 7-parameter similarity transform (scale, rotation, translation) from the PLY's local frame to ECEF, and writes an octree-tiled tileset where every tile is a GLB carrying an SPZ v3 payload.
+The pipeline takes a standard 3DGS `.ply`, a 7-parameter similarity transform (scale, rotation, translation) from the PLY's local frame to ECEF, and writes an octree-tiled tileset where every tile is a GLB carrying an SPZ v3 payload. Two tiling modes are available: `flat` (default, splats in leaf tiles only) and `lod` (hierarchical level of detail).
 
 > Derived from [wahyunanandika/3dtiles_georeference_3dgs](https://github.com/wahyunanandika/3dtiles_georeference_3dgs),
 > which builds on [dozeri83/geo-register-plugin](https://github.com/dozeri83/geo-register-plugin).
@@ -19,6 +19,7 @@ The pipeline takes a standard 3DGS `.ply`, a 7-parameter similarity transform (s
   - [Option A: Manual anchor (known origin, e.g. a benchmark)](#option-a-manual-anchor-known-origin-eg-a-benchmark)
   - [Option B: Camera-based solve (Python API)](#option-b-camera-based-solve-python-api)
 - [Step 2 — Export 3D Tiles](#step-2--export-3d-tiles)
+  - [Tiling modes](#tiling-modes)
 - [Step 3 — Check the tileset](#step-3--check-the-tileset)
 - [Step 4 (optional) — Package as `.3tz`](#step-4-optional--package-as-3tz)
 - [Viewing the result](#viewing-the-result)
@@ -33,7 +34,9 @@ The pipeline takes a standard 3DGS `.ply`, a 7-parameter similarity transform (s
 | File | Role |
 |---|---|
 | `solve_manual_anchor.py` | CLI. Builds `similarity_transform.json` from one known anchor point (no camera data needed). |
-| `tiles_exporter.py` | CLI + module. Reads the PLY, builds the octree, writes `tileset.json` and `tile_XXXX.glb`. |
+| `tiles_exporter.py` | CLI + module. Reads the PLY, builds the octree, writes `tileset.json` and the tile GLBs (`--tiling flat` or `lod`). |
+| `lod_tiling.py` | Module. Hierarchical LOD for `--tiling lod`: reduced copies of each subtree in internal octree nodes. |
+| `tileset_writer.py` | Module. Writes `tileset.json` for the selected 3D Tiles version (`1.1`; `2.0` reserved). |
 | `spz_encode.py` | Module. Pure-Python SPZ v3 encoder (mirrors Niantic's `load-spz.cc` v3 path). |
 | `transform_solver.py` | Module. WGS84 geodetic ⇄ ECEF conversion, Umeyama, RANSAC-Umeyama, and the camera-based `solve_ply_to_ecef` solver. |
 | `sanity_check.ipynb` | Notebook. Prints the extensions declared in a generated `tileset.json`. |
@@ -69,7 +72,7 @@ splat.ply (local frame)
 out_dir/
 ├── tileset.json                   ← root.transform = similarity matrix
 ├── tile_0000.glb                  ← SPZ-compressed splats, local coordinates
-├── tile_0001.glb
+├── tile_0001.glb                     (--tiling lod: tiles/D<depth>/NNNNNN.glb instead)
 └── ...
       │
       ▼
@@ -217,9 +220,13 @@ python tiles_exporter.py <splat.ply> <similarity_transform.json> <out_dir> [opti
 | `ply` | | Input PLY |
 | `similarity_json` | | Transform from Step 1 |
 | `out_dir` | | Output folder (created if missing) |
+| `--tiling {flat,lod}` | `flat` | Tiling mode — see [Tiling modes](#tiling-modes) |
+| `--tiles-version {1.1,2.0}` | `1.1` | 3D Tiles version of `tileset.json`. `2.0` is reserved and exits with an error until the OGC 3D Tiles 2.0 standard is ratified |
 | `--max-sh-degree {0,1,2,3}` | `3` | Highest SH degree to include |
-| `--max-splats-per-tile INT` | `0` (auto) | Max splats per leaf tile |
+| `--max-splats-per-tile INT` | `0` (auto) | Max splats per leaf tile (in `lod` mode also the splat budget of every tile) |
 | `--min-tile-size FLOAT` | `0.1` | Stop splitting when a cell diagonal is below this (PLY units) |
+| `--error-scale FLOAT` | `16` | `lod` only. Multiplier on every tile's `geometricError` |
+| `--lod-max-inflate FLOAT` | `2` | `lod` only. Maximum enlargement of a kept splat per level |
 | `--fraction FLOAT` | `1.0` | Random subsample for quick tests, `0 < f ≤ 1` |
 | `--seed INT` | `0` | RNG seed for `--fraction` |
 
@@ -242,7 +249,32 @@ python tiles_exporter.py scan.ply out/similarity_transform.json out/tiles
 # Quick preview: 10% of splats, SH degree 0
 python tiles_exporter.py scan.ply out/similarity_transform.json out/preview \
     --fraction 0.1 --max-sh-degree 0
+
+# Hierarchical LOD
+python tiles_exporter.py scan.ply out/similarity_transform.json out/tiles_lod --tiling lod
 ```
+
+### Tiling modes
+
+| | `flat` (default) | `lod` |
+|---|---|---|
+| Content | Leaf tiles only | Every node (root = coarsest) |
+| Output | `tile_XXXX.glb` | `tiles/D<depth>/NNNNNN.glb` (`D0` = root) |
+| Size on disk | 1× splats | More splats (coarse copies in internal tiles) |
+
+How `lod` is built (`lod_tiling.py`):
+
+1. The same octree as `flat` is built. Leaves keep their full-resolution splats.
+2. Bottom-up, each internal node reduces its children's content to at most
+   `--max-splats-per-tile` splats by voxel clustering: one splat per voxel
+   (largest opacity × projected area), enlarged so it covers what the voxel held
+   (capped by `--lod-max-inflate` and by the voxel size).
+3. `geometricError` of an internal tile = median splat diameter of its content ×
+   `--error-scale`; leaves = 0; never increasing towards the leaves.
+   Refinement is `REPLACE`: a parent is swapped for its children, never drawn with them.
+
+Tile conventions (step 3) follow dozeri's `geo/ssog_tiles.py`; the level construction
+(step 2) is done in numpy, without LichtFeld Studio.
 
 The same output works in both Cesium and ArcGIS Pro. ArcGIS Pro 3.7 recognizes it as a Gaussian Splat layer from `3DTILES_content_gltf` + `KHR_gaussian_splatting_compression_spz_2`; no Esri-specific extension is written.
 
@@ -271,7 +303,7 @@ extensionsRequired: ['3DTILES_content_gltf']
 
 ## Step 4 (optional) — Package as `.3tz`
 
-After Step 2, `out_dir` holds `tileset.json` plus one GLB per leaf tile, which can be hundreds of files. To keep things tidy for moving, sharing or archiving, pack the folder into a single `.3tz` with [3d-tiles-tools](https://github.com/CesiumGS/3d-tiles-tools):
+After Step 2, `out_dir` holds `tileset.json` plus one GLB per tile, which can be hundreds of files. To keep things tidy for moving, sharing or archiving, pack the folder into a single `.3tz` with [3d-tiles-tools](https://github.com/CesiumGS/3d-tiles-tools):
 
 ```bash
 npx 3d-tiles-tools convert -i out/tiles/tileset.json -o out/scan.3tz
@@ -317,9 +349,13 @@ Open a **Local Scene** (not a 2D map) and add the tileset or `.3tz`.
 - `extensionsUsed` / `extensionsRequired`: `3DTILES_content_gltf`
 - `root.transform`: the 4×4 similarity matrix (column-major), local → ECEF
 - Bounding volumes: oriented boxes in the local frame
-- `geometricError`: bbox diagonal for internal nodes, `0.0` for leaves; `refine: "REPLACE"`
+- `geometricError`:
+  - `flat`: bbox diagonal for internal nodes, `0.0` for leaves
+  - `lod`: median splat diameter × `--error-scale` for internal nodes, `0.0` for leaves
+- `refine: "REPLACE"`
+- `flat`: content only in leaf tiles; `lod`: content in every tile
 
-**tile_XXXX.glb**
+**tile_XXXX.glb** (`lod`: `tiles/D<depth>/NNNNNN.glb`, same format)
 
 - glTF 2.0 with one `POINTS` primitive
 - `KHR_gaussian_splatting` + `KHR_gaussian_splatting_compression_spz_2` (required), `KHR_materials_unlit`
@@ -359,4 +395,6 @@ GPL-3.0.
 SPZ encoding, similarity transform estimation and the 3D Tiles export structure trace back to
 [dozeri83/geo-register-plugin](https://github.com/dozeri83/geo-register-plugin) via
 [3dtiles_georeference_3dgs](https://github.com/wahyunanandika/3dtiles_georeference_3dgs).
+The hierarchical LOD tile conventions (REPLACE refinement, geometricError from median splat
+diameter × error scale) follow dozeri's `geo/ssog_tiles.py`.
 The SPZ encoder follows the [Niantic SPZ](https://github.com/nianticlabs/spz) format specification (MIT).
